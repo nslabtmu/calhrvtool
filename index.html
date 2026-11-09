@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HRV RAW 分析工具</title>
+<style>
+:root{--bg:#fafaf8;--fg:#1d1d1b;--mut:#6b6b66;--card:#fff;--line:#dcdcd5;--acc:#1f6feb;--bad:#c0392b;--ok:#2e7d32;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#17181a;--fg:#ececea;--mut:#9a9a94;--card:#202225;--line:#383a3e;--acc:#5b9bff;--bad:#ff7b6b;--ok:#6fcf74}}
+:root[data-theme="dark"]{--bg:#17181a;--fg:#ececea;--mut:#9a9a94;--card:#202225;--line:#383a3e;--acc:#5b9bff;--bad:#ff7b6b;--ok:#6fcf74}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Noto Sans TC","Segoe UI",sans-serif}
+main{max-width:1100px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:22px;margin:0 0 4px}p.sub{color:var(--mut);margin:0 0 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px}
+#drop{border:2px dashed var(--line);border-radius:10px;padding:28px;text-align:center;cursor:pointer;color:var(--mut)}
+#drop.over{border-color:var(--acc);color:var(--acc)}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+button{background:var(--acc);color:#fff;border:0;border-radius:7px;padding:8px 14px;font:inherit;cursor:pointer}
+button.sec{background:transparent;color:var(--fg);border:1px solid var(--line)}
+button:disabled{opacity:.45;cursor:default}
+input[type=number]{width:80px;padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
+.tw{overflow-x:auto;max-width:100%}
+table{border-collapse:collapse;font-size:13px;white-space:nowrap}
+th,td{border-bottom:1px solid var(--line);padding:5px 9px;text-align:right}
+th{position:sticky;top:0;background:var(--card);color:var(--mut);font-weight:600}
+td:first-child,th:first-child{text-align:left}
+tbody tr{cursor:pointer}tbody tr:hover,tr.sel{background:color-mix(in srgb,var(--acc) 12%,transparent)}
+.warn{color:var(--bad)}.good{color:var(--ok)}
+canvas{width:100%;height:auto;display:block}
+textarea{width:100%;height:110px;margin-top:8px;font:12px monospace;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px}
+small{color:var(--mut)}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+<main>
+<h1>HRV RAW 分析工具</h1>
+<p class="sub">拖入 K&amp;Y 心電 .RAW（或裝置輸出的 .TXT RR 檔），在瀏覽器內計算時域、頻域、非線性 HRV，檔案不會上傳。</p>
+
+<div class="card">
+  <div id="drop">把 .RAW / .TXT 檔拖到這裡，或點此選檔（可多選）</div>
+  <input id="fi" type="file" multiple accept=".raw,.RAW,.txt,.TXT" hidden>
+  <div class="row" style="margin-top:12px">
+    <label>取樣率 Hz <input id="fs" type="number" value="" placeholder="自動" min="100" max="2000"></label>
+    <small>空白＝從檔頭讀取（K&amp;Y 檔頭為 500）；若儀器規格不同請手動填寫。</small>
+  </div>
+</div>
+
+<div class="card">
+  <div class="row" style="margin-bottom:10px">
+    <button id="bx" disabled>匯出 Excel (.xlsx)</button>
+    <button id="bc" class="sec" disabled>複製表格（貼到 Excel）</button>
+    <button id="bk" class="sec" disabled>清除</button>
+    <small id="st"></small>
+  </div>
+  <div class="tw"><table id="tb"><thead></thead><tbody></tbody></table></div>
+  <textarea id="ta" hidden readonly></textarea>
+</div>
+
+<div class="card" id="pc" hidden>
+  <div id="pt" style="margin-bottom:6px"></div>
+  <canvas id="cv" width="1000" height="420"></canvas>
+  <small>上：ECG 10 秒與偵測到的 R 波（紅點）。下：RR 間期（紅點為被排除的心搏）。請目視確認 R 波偵測正確。</small>
+  <canvas id="cp" width="440" height="440" style="max-width:440px;margin-top:14px"></canvas>
+  <small>Poincaré 圖：RRn vs RRn+1，橢圓軸長為 SD1（短軸）與 SD2（長軸）。</small>
+</div>
+
+<div class="card"><small>方法：排除起始飽和雜訊（最後一次飽和後再加 2 秒）→ R 波偵測（導數平方、不反應期 300 ms）→ RR 異常值（偏離局部中位數 &gt; 20% 或不在 300–2000 ms）排除 → 時域指標；頻域以三次樣條 4 Hz 重取樣、線性去趨勢、Welch（Hann、約 128 秒視窗、50% 重疊）。VLF 0.003–0.04、LF 0.04–0.15、HF 0.15–0.40 Hz；TP = VLF+LF+HF。
+非線性（以排除異常後的 NN 序列計算）：SD1/SD2 為 Poincaré 指標；SampEn、ApEn 為 m=2、r=0.2×SD（心搏數超過 3000 時取前 3000 拍）；DFA α1＝窗長 4–16 拍、α2＝16–64 拍的斜率；Higuchi FD 用 kmax=10；MSE_sum＝尺度 1–5 的樣本熵總和（r 固定為原始序列 0.2×SD）。非線性指標在少於約 300–500 拍時不穩定，QC 會提示。與儀器內建軟體的數值可能有小差異，同一研究請全部用同一套演算法。</small></div>
+</main>
+
+<script>
+const COLS=["file","source","fs_Hz","beats","analysed_s","excluded_pct","meanNN_ms","HR_bpm","SDNN_ms","RMSSD_ms","pNN50_pct","SD1_ms","SD2_ms","SD1_SD2","VLF_ms2","LF_ms2","HF_ms2","TP_ms2","LFnu","HFnu","LF_HF","lnHF","lnLF","lnTP","HF_peak_Hz","SampEn","ApEn","DFA_a1","DFA_a2","HiguchiFD","MSE_sum","QC"];
+let rows=[],sel=-1;
+const $=id=>document.getElementById(id);
+
+/* ---------- 數學工具 ---------- */
+function fft(re,im){const n=re.length;for(let i=1,j=0;i<n;i++){let b=n>>1;for(;j&b;b>>=1)j^=b;j^=b;if(i<j){[re[i],re[j]]=[re[j],re[i]];[im[i],im[j]]=[im[j],im[i]];}}
+for(let len=2;len<=n;len<<=1){const a=-2*Math.PI/len,wr=Math.cos(a),wi=Math.sin(a);for(let i=0;i<n;i+=len){let cr=1,ci=0;for(let k=0;k<len/2;k++){const u=i+k,v=u+len/2,tr=re[v]*cr-im[v]*ci,ti=re[v]*ci+im[v]*cr;re[v]=re[u]-tr;im[v]=im[u]-ti;re[u]+=tr;im[u]+=ti;const nr=cr*wr-ci*wi;ci=cr*wi+ci*wr;cr=nr;}}}}
+function welch(x,fs){let np=512;while(np>x.length)np>>=1;const nfft=2048,w=[],P=new Float64Array(nfft/2+1);let sw=0,cnt=0;
+for(let i=0;i<np;i++){w[i]=.5-.5*Math.cos(2*Math.PI*i/np);sw+=w[i]*w[i];}
+for(let s=0;s+np<=x.length;s+=np/2){const re=new Float64Array(nfft),im=new Float64Array(nfft);let m=0;for(let i=0;i<np;i++)m+=x[s+i];m/=np;
+for(let i=0;i<np;i++)re[i]=(x[s+i]-m)*w[i];fft(re,im);for(let k=0;k<=nfft/2;k++){let p=(re[k]*re[k]+im[k]*im[k])/(fs*sw);if(k>0&&k<nfft/2)p*=2;P[k]+=p;}cnt++;}
+for(let k=0;k<P.length;k++)P[k]/=cnt;return{P,df:fs/nfft};}
+function spline(x,y){const n=x.length-1,h=[],al=[],l=[1],mu=[0],z=[0],c=new Array(n+1).fill(0),b=[],d=[];
+for(let i=0;i<n;i++)h[i]=x[i+1]-x[i];for(let i=1;i<n;i++)al[i]=3/h[i]*(y[i+1]-y[i])-3/h[i-1]*(y[i]-y[i-1]);
+for(let i=1;i<n;i++){l[i]=2*(x[i+1]-x[i-1])-h[i-1]*mu[i-1];mu[i]=h[i]/l[i];z[i]=(al[i]-h[i-1]*z[i-1])/l[i];}
+for(let j=n-1;j>=0;j--){c[j]=z[j]-mu[j]*c[j+1];b[j]=(y[j+1]-y[j])/h[j]-h[j]*(c[j+1]+2*c[j])/3;d[j]=(c[j+1]-c[j])/(3*h[j]);}
+return q=>{let lo=0,hi=n;while(hi-lo>1){const m=(lo+hi)>>1;if(x[m]>q)hi=m;else lo=m;}const dx=q-x[lo];return y[lo]+b[lo]*dx+c[lo]*dx*dx+d[lo]*dx*dx*dx;};}
+const median=a=>{const s=[...a].sort((p,q)=>p-q),m=s.length>>1;return s.length%2?s[m]:(s[m-1]+s[m])/2;};
+const mean=a=>a.reduce((p,q)=>p+q,0)/a.length;
+const sd=a=>{const m=mean(a);return Math.sqrt(a.reduce((p,q)=>p+(q-m)**2,0)/(a.length-1));};
+
+/* ---------- 非線性工具 ---------- */
+function slope(p){if(p.length<2)return NaN;const mx=mean(p.map(q=>q[0])),my=mean(p.map(q=>q[1]));let a=0,b=0;for(const[x,y]of p){a+=(x-mx)*(y-my);b+=(x-mx)**2;}return a/b;}
+function sampen(x,m,r){const N=x.length;let A=0,B=0;
+  for(let i=0;i<N-m;i++)for(let j=i+1;j<N-m;j++){let d=0;for(let k=0;k<m;k++){const t=Math.abs(x[i+k]-x[j+k]);if(t>d)d=t;}
+    if(d<r){B++;if(Math.abs(x[i+m]-x[j+m])<r)A++;}}
+  return A&&B?-Math.log(A/B):NaN;}
+function apen(x,m,r){const phi=mm=>{const n=x.length-mm+1;let s=0;for(let i=0;i<n;i++){let c=0;for(let j=0;j<n;j++){let d=0;for(let k=0;k<mm;k++){const t=Math.abs(x[i+k]-x[j+k]);if(t>d)d=t;}if(d<=r)c++;}s+=Math.log(c/n);}return s/n;};
+  return phi(m)-phi(m+1);}
+function dfa(x,ns){const m=mean(x),y=[];let a=0;for(const v of x){a+=v-m;y.push(a);}const pts=[];
+  for(const n of ns){const nw=Math.floor(y.length/n);if(nw<2)continue;let ss=0;
+    for(let w=0;w<nw;w++){let sx=0,sy=0,sxy=0,sxx=0;for(let i=0;i<n;i++){const v=y[w*n+i];sx+=i;sy+=v;sxy+=i*v;sxx+=i*i;}
+      const b=(n*sxy-sx*sy)/(n*sxx-sx*sx),a0=(sy-b*sx)/n;for(let i=0;i<n;i++){const e=y[w*n+i]-a0-b*i;ss+=e*e;}}
+    pts.push([Math.log(n),Math.log(Math.sqrt(ss/(nw*n)))]);}
+  return pts.length>=Math.min(4,ns.length)?slope(pts):NaN;}
+function higuchi(x,kmax){const N=x.length,pts=[];
+  for(let k=1;k<=kmax;k++){let L=0;for(let m=0;m<k;m++){const nn=Math.floor((N-1-m)/k);if(nn<1)continue;let s=0;for(let i=1;i<=nn;i++)s+=Math.abs(x[m+i*k]-x[m+(i-1)*k]);L+=s*(N-1)/(nn*k)/k;}
+    pts.push([Math.log(1/k),Math.log(L/k)]);}
+  return slope(pts);}
+function mse(x,r,smax){let s=0;for(let t=1;t<=smax;t++){const n=Math.floor(x.length/t),c=[];for(let i=0;i<n;i++){let a=0;for(let k=0;k<t;k++)a+=x[i*t+k];c.push(a/t);}
+  const v=sampen(c,2,r);if(!isFinite(v))return NaN;s+=v;}return s;}
+
+/* ---------- RR 分析 ---------- */
+function analyzeRR(rr){
+  const n=rr.length,ok=new Array(n).fill(true);
+  for(let i=0;i<n;i++){const lo=Math.max(0,i-5),hi=Math.min(n,i+6),md=median(rr.slice(lo,hi));
+    if(rr[i]<300||rr[i]>2000||Math.abs(rr[i]-md)/md>0.2)ok[i]=false;}
+  const t=[];let acc=0;for(let i=0;i<n;i++){acc+=rr[i]/1000;t.push(acc);}
+  const good=rr.filter((_,i)=>ok[i]);if(good.length<30)return{err:"有效心搏不足"};
+  const dd=[];for(let i=1;i<n;i++)if(ok[i]&&ok[i-1])dd.push(rr[i]-rr[i-1]);
+  const mnn=mean(good),sdnn=sd(good),rmssd=Math.sqrt(mean(dd.map(v=>v*v))),pnn=100*dd.filter(v=>Math.abs(v)>50).length/dd.length;
+  const sd1=Math.sqrt(.5)*sd(dd),sd2=Math.sqrt(Math.max(0,2*sdnn*sdnn-.5*sd(dd)**2));
+  const tg=[],yg=[];for(let i=0;i<n;i++)if(ok[i]){tg.push(t[i]);yg.push(rr[i]);}
+  const fi=4,sp=spline(tg,yg),ys=[];for(let q=tg[0];q<=tg[tg.length-1];q+=1/fi)ys.push(sp(q));
+  const N=ys.length,tm=(N-1)/2,ym=mean(ys);let sxy=0,sxx=0;for(let i=0;i<N;i++){sxy+=(i-tm)*(ys[i]-ym);sxx+=(i-tm)**2;}
+  const sl=sxy/sxx,det=ys.map((v,i)=>v-ym-sl*(i-tm));
+  const{P,df}=welch(det,fi),band=(a,b)=>{let s=0;for(let k=0;k<P.length;k++){const f=k*df;if(f>=a&&f<b)s+=P[k]*df;}return s;};
+  const vlf=band(.003,.04),lf=band(.04,.15),hf=band(.15,.4),tp=vlf+lf+hf;let pk=0,pf=0;for(let k=0;k<P.length;k++){const f=k*df;if(f>=.15&&f<.4&&P[k]>pk){pk=P[k];pf=f;}}
+  /* 非線性 */
+  const cap=good.slice(0,3000),r=0.2*sd(cap);
+  const SE=sampen(cap,2,r),AE=apen(cap,2,r),a1=dfa(good,[4,5,6,7,8,9,10,11,12,13,14,15,16]),a2=dfa(good,[16,20,24,32,40,48,56,64]),
+    hfd=higuchi(cap,10),ms=mse(cap,r,5);
+  const dur=tg[tg.length-1]-tg[0],ex=100*(1-good.length/n),qc=[];
+  if(dur<240)qc.push("短於5分鐘");if(ex>5)qc.push("排除心搏>5%");if(good.length<300)qc.push("心搏<300，非線性指標不穩定");
+  return{beats:n,analysed_s:dur,excluded_pct:ex,meanNN_ms:mnn,HR_bpm:60000/mnn,SDNN_ms:sdnn,RMSSD_ms:rmssd,pNN50_pct:pnn,SD1_ms:sd1,SD2_ms:sd2,SD1_SD2:sd1/sd2,
+   VLF_ms2:vlf,LF_ms2:lf,HF_ms2:hf,TP_ms2:tp,LFnu:100*lf/(lf+hf),HFnu:100*hf/(lf+hf),LF_HF:lf/hf,lnHF:Math.log(hf),lnLF:Math.log(lf),lnTP:Math.log(tp),
+   HF_peak_Hz:pf,SampEn:SE,ApEn:AE,DFA_a1:a1,DFA_a2:a2,HiguchiFD:hfd,MSE_sum:ms,QC:qc.length?qc.join("；"):"OK",_rr:rr,_ok:ok,_t:t};
+}
+
+/* ---------- RAW：R 波偵測 ---------- */
+function bq(x,type,f0,fs){const w=2*Math.PI*f0/fs,c=Math.cos(w),al=Math.sin(w)/(2*.7071),k=type==="lp"?1-c:1+c,b0=k/2,b1=type==="lp"?k:-k,a0=1+al,a1=-2*c,a2=1-al,y=new Float64Array(x.length);
+  let x1=x[0],x2=x[0],y1=type==="lp"?x[0]:0,y2=y1;for(let i=0;i<x.length;i++){const v=(b0*x[i]+b1*x1+b0*x2-a1*y1-a2*y2)/a0;y[i]=v;x2=x1;x1=x[i];y2=y1;y1=v;}return y;}
+function filt(x,type,f0,fs){let y=bq(x,type,f0,fs);y=bq(y.reverse(),type,f0,fs);return y.reverse();}
+
+function fromRaw(buf,name,fsOv){
+  const u=new Uint8Array(buf),hdr=String.fromCharCode(...u.slice(0,512));
+  const m=/(\d{5}\.\d+)/.exec(hdr),fs=fsOv||(m?parseFloat(m[1]):500);
+  const raw=u.subarray(512);let last=-1;for(let i=0;i<raw.length;i++)if(raw[i]<=1||raw[i]>=254)last=i;
+  const st=Math.min(raw.length-1,last<0?0:last+Math.round(2*fs)),x=raw.subarray(st),N=x.length;
+  const y=filt(filt(Float64Array.from(x),"hp",5,fs),"lp",25,fs),w=Math.round(.08*fs),e=new Float64Array(N+1),cs=new Float64Array(N+1);
+  for(let i=1;i<N;i++)e[i]=(y[i]-y[i-1])**2;for(let i=0;i<N;i++)cs[i+1]=cs[i]+e[i];
+  const sm=new Float64Array(N);for(let i=0;i<N;i++){const a=Math.max(0,i-(w>>1)),b=Math.min(N,i+(w>>1)+1);sm[i]=(cs[b]-cs[a])/w;}
+  const thr=.35*[...sm].sort((p,q)=>p-q)[Math.floor(.99*N)],dist=Math.round(.3*fs),pk=[];
+  for(let i=1;i<N-1;i++)if(sm[i]>thr&&sm[i]>sm[i-1]&&sm[i]>=sm[i+1]){
+    if(pk.length&&i-pk[pk.length-1]<dist){if(sm[i]>sm[pk[pk.length-1]])pk[pk.length-1]=i;}else pk.push(i);}
+  const r=[...new Set(pk.map(p=>{const lo=Math.max(0,p-Math.round(.05*fs)),hi=Math.min(N,p+Math.round(.05*fs));let b=lo;for(let j=lo;j<hi;j++)if(x[j]>x[b])b=j;return b;}))];
+  const rr=[];for(let i=1;i<r.length;i++)rr.push((r[i]-r[i-1])/fs*1000);
+  const a=analyzeRR(rr);if(a.err)return{file:name,source:"RAW",fs_Hz:fs,QC:a.err};
+  const s0=Math.min(Math.max(0,Math.round(60*fs)),Math.max(0,N-Math.round(10*fs)));
+  return{file:name,source:"RAW",fs_Hz:fs,...a,_x:x.slice(s0,s0+Math.round(10*fs)),_s0:s0,_r:r,_fs:fs,
+    QC:(st>raw.length/2?"起始雜訊過長；":"")+a.QC};
+}
+function fromTxt(text,name){
+  let rr=[];for(const ln of text.split(/\r?\n/)){const m=/^\d\d:\d\d:\d\d,\s*(\d+)\s*$/.exec(ln);if(m)rr.push(+m[1]);}
+  let k=-1;for(let i=0;i<Math.min(150,rr.length);i++)if(rr[i]<350||rr[i]>1500)k=i;rr=rr.slice(k+1);
+  const a=analyzeRR(rr);if(a.err)return{file:name,source:"TXT",QC:a.err};
+  return{file:name,source:"TXT",fs_Hz:"",...a};
+}
+
+/* ---------- 介面 ---------- */
+const fmt=v=>typeof v==="number"?(!isFinite(v)?"":Math.abs(v)>=100?v.toFixed(0):v.toFixed(2)):(v??"");
+const num=v=>typeof v==="number"?(isFinite(v)?+v.toFixed(4):""):(v??"");
+function render(){
+  $("tb").tHead.innerHTML="<tr>"+COLS.map(c=>`<th>${c}</th>`).join("")+"</tr>";
+  $("tb").tBodies[0].innerHTML=rows.map((r,i)=>`<tr data-i="${i}" class="${i===sel?"sel":""}">`+COLS.map(c=>{
+    const v=r[c];return `<td class="${c==="QC"?(v==="OK"?"good":"warn"):""}">${fmt(v)}</td>`;}).join("")+"</tr>").join("");
+  const has=rows.length>0;["bx","bc","bk"].forEach(id=>$(id).disabled=!has);
+  $("st").textContent=has?`${rows.length} 筆`:"";
+}
+async function handle(files){
+  const fsOv=parseFloat($("fs").value)||0;
+  for(const f of files){
+    $("st").textContent="處理中："+f.name;await new Promise(r=>setTimeout(r,20));
+    try{rows.push(/\.txt$/i.test(f.name)?fromTxt(await f.text(),f.name):fromRaw(await f.arrayBuffer(),f.name,fsOv));}
+    catch(e){rows.push({file:f.name,QC:"讀取失敗"});}
+    render();
+  }
+  if(rows.length&&sel<0)show(rows.length-1);
+}
+function poincare(r){
+  const cv=$("cp"),g=cv.getContext("2d"),W=cv.width,cs=getComputedStyle(document.documentElement),
+    fg=cs.getPropertyValue("--fg"),mut=cs.getPropertyValue("--mut"),acc=cs.getPropertyValue("--acc"),bad=cs.getPropertyValue("--bad");
+  g.clearRect(0,0,W,W);const p=[];for(let i=1;i<r._rr.length;i++)if(r._ok[i]&&r._ok[i-1])p.push([r._rr[i-1],r._rr[i]]);
+  if(!p.length)return;const all=p.flat(),mn=Math.min(...all)-20,mx=Math.max(...all)+20,S=v=>40+(v-mn)/(mx-mn)*(W-60),Y=v=>W-40-(v-mn)/(mx-mn)*(W-60);
+  g.strokeStyle=mut;g.lineWidth=1;g.strokeRect(40,20,W-60,W-60);g.beginPath();g.moveTo(S(mn),Y(mn));g.lineTo(S(mx),Y(mx));g.stroke();
+  g.globalAlpha=.55;g.fillStyle=acc;for(const[a,b]of p){g.beginPath();g.arc(S(a),Y(b),3,0,7);g.fill();}g.globalAlpha=1;
+  const mu=mean(all),k=(W-60)/(mx-mn);g.strokeStyle=bad;g.lineWidth=2;g.beginPath();
+  g.ellipse(S(mu),Y(mu),r.SD2_ms*k,r.SD1_ms*k,-Math.PI/4,0,2*Math.PI);g.stroke();
+  g.fillStyle=mut;g.font="13px sans-serif";g.fillText("RRn (ms)",W/2-20,W-8);g.fillText("RRn+1",2,14);
+  g.fillText("SD1 "+r.SD1_ms.toFixed(1)+"　SD2 "+r.SD2_ms.toFixed(1)+"　SD1/SD2 "+r.SD1_SD2.toFixed(2),46,36);
+}
+function show(i){
+  sel=i;render();const r=rows[i];if(!r||!r._rr){$("pc").hidden=true;return;}
+  $("pc").hidden=false;$("pt").textContent=r.file+"　HR "+fmt(r.HR_bpm)+" bpm｜RMSSD "+fmt(r.RMSSD_ms)+" ms｜HF "+fmt(r.HF_ms2)+" ms²｜SampEn "+fmt(r.SampEn)+"｜DFA α1 "+fmt(r.DFA_a1);
+  poincare(r);
+  const cv=$("cv"),g=cv.getContext("2d"),W=cv.width,H=cv.height,cs=getComputedStyle(document.documentElement),
+    fg=cs.getPropertyValue("--fg"),mut=cs.getPropertyValue("--mut"),acc=cs.getPropertyValue("--acc"),bad=cs.getPropertyValue("--bad");
+  g.clearRect(0,0,W,H);g.font="13px sans-serif";g.fillStyle=mut;
+  const top=r._x?200:0;
+  if(r._x){const x=r._x,mn=Math.min(...x),mx=Math.max(...x);g.strokeStyle=acc;g.beginPath();
+    x.forEach((v,k)=>{const px=30+k/x.length*(W-40),py=190-(v-mn)/(mx-mn||1)*170;k?g.lineTo(px,py):g.moveTo(px,py);});g.stroke();
+    g.fillStyle=bad;for(const p of r._r){const k=p-r._s0;if(k>=0&&k<x.length){g.beginPath();g.arc(30+k/x.length*(W-40),190-(x[k]-mn)/(mx-mn||1)*170,4,0,7);g.fill();}}
+    g.fillStyle=mut;g.fillText("ECG（"+(x.length/r._fs).toFixed(0)+" 秒）",30,14);}
+  const rr=r._rr,t=r._t,mn=Math.min(...rr.filter((_,k)=>r._ok[k])),mx=Math.max(...rr.filter((_,k)=>r._ok[k])),y0=top+20,y1=H-20,T=t[t.length-1];
+  g.fillStyle=mut;g.fillText("RR (ms)　"+Math.round(mn)+"–"+Math.round(mx),30,top+12);
+  rr.forEach((v,k)=>{g.fillStyle=r._ok[k]?fg:bad;const vv=Math.min(Math.max(v,mn),mx);g.fillRect(30+t[k]/T*(W-40)-1.5,y1-(vv-mn)/(mx-mn||1)*(y1-y0)-1.5,3,3);});
+}
+$("tb").addEventListener("click",e=>{const tr=e.target.closest("tr[data-i]");if(tr)show(+tr.dataset.i);});
+const drop=$("drop");drop.onclick=()=>$("fi").click();$("fi").onchange=e=>{handle([...e.target.files]);e.target.value="";};
+["dragover","dragenter"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add("over");}));
+["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove("over");}));
+drop.addEventListener("drop",e=>handle([...e.dataTransfer.files]));
+$("bk").onclick=()=>{rows=[];sel=-1;$("pc").hidden=true;$("ta").hidden=true;render();};
+const tsv=()=>[COLS.join("\t"),...rows.map(r=>COLS.map(c=>num(r[c])).join("\t"))].join("\n");
+$("bc").onclick=async()=>{const ta=$("ta");ta.value=tsv();ta.hidden=false;ta.select();
+  try{await navigator.clipboard.writeText(ta.value);$("st").textContent="已複製，請到 Excel 貼上";}catch(e){try{document.execCommand("copy");}catch(_){}$("st").textContent="請在下方文字框按 Ctrl/Cmd+C 複製";}};
+$("bx").onclick=async()=>{
+  if(typeof XLSX==="undefined"){$("st").textContent="Excel 元件載入失敗，請改用「複製表格」";return;}
+  const data=rows.map(r=>Object.fromEntries(COLS.map(c=>[c,num(r[c])])));
+  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(data,{header:COLS}),"HRV");
+  const blob=new Blob([XLSX.write(wb,{bookType:"xlsx",type:"array"})],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+  try{const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="HRV_results.xlsx";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),5000);$("st").textContent="已匯出";}
+  catch(e){$("st").textContent="無法直接下載，請改用「複製表格」貼到 Excel";}
+};
+render();
+</script>
+</body>
+</html>
