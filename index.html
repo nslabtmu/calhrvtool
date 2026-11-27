@@ -3,16 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>HRV RAW 分析工具</title>
+<title>HRV RAW 分析工具與研究指南</title>
 <style>
 :root{--bg:#fafaf8;--fg:#1d1d1b;--mut:#6b6b66;--card:#fff;--line:#dcdcd5;--acc:#1f6feb;--bad:#c0392b;--ok:#2e7d32;
 box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#17181a;--fg:#ececea;--mut:#9a9a94;--card:#202225;--line:#383a3e;--acc:#5b9bff;--bad:#ff7b6b;--ok:#6fcf74}}
 :root[data-theme="dark"]{--bg:#17181a;--fg:#ececea;--mut:#9a9a94;--card:#202225;--line:#383a3e;--acc:#5b9bff;--bad:#ff7b6b;--ok:#6fcf74}
 html{scroll-padding-top:env(safe-area-inset-top,0px)}
-body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Noto Sans TC","Segoe UI",sans-serif}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 system-ui,-apple-system,"Noto Sans TC","Segoe UI",sans-serif}
 main{max-width:1100px;margin:0 auto;padding:20px 16px 48px}
-h1{font-size:22px;margin:0 0 4px}p.sub{color:var(--mut);margin:0 0 16px}
+h1{font-size:22px;margin:0 0 4px}h2{font-size:17px;margin:0 0 8px}p.sub{color:var(--mut);margin:0 0 16px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px}
 #drop{border:2px dashed var(--line);border-radius:10px;padding:28px;text-align:center;cursor:pointer;color:var(--mut)}
 #drop.over{border-color:var(--acc);color:var(--acc)}
@@ -29,15 +29,22 @@ td:first-child,th:first-child{text-align:left}
 tbody tr{cursor:pointer}tbody tr:hover,tr.sel{background:color-mix(in srgb,var(--acc) 12%,transparent)}
 .warn{color:var(--bad)}.good{color:var(--ok)}
 canvas{width:100%;height:auto;display:block}
+.pair{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),1fr));gap:14px;margin-top:14px}
+.pair canvas{max-width:440px}
 textarea{width:100%;height:110px;margin-top:8px;font:12px monospace;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px}
 small{color:var(--mut)}
+.rep{border-top:1px solid var(--line);padding-top:12px;margin-top:12px}
+select{padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);font:inherit}
+body.pr main>*:not(#rp){display:none}
+details{border-top:1px solid var(--line);padding:8px 0}details:first-of-type{border-top:0}
+summary{cursor:pointer;font-weight:600}details p,details ul{margin:6px 0 0;color:var(--mut)}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 <main>
-<h1>HRV RAW 分析工具</h1>
-<p class="sub">拖入 K&amp;Y 心電 .RAW（或裝置輸出的 .TXT RR 檔），在瀏覽器內計算時域、頻域、非線性 HRV，檔案不會上傳。</p>
+<h1>HRV RAW 分析工具與研究指南</h1>
+<p class="sub">拖入 K&amp;Y 心電 .RAW（或裝置輸出的 .TXT RR 檔），在瀏覽器內計算時域、頻域、非線性 HRV，檔案不會上傳。下方附判讀指南。</p>
 
 <div class="card">
   <div id="drop">把 .RAW / .TXT 檔拖到這裡，或點此選檔（可多選）</div>
@@ -63,8 +70,57 @@ small{color:var(--mut)}
   <div id="pt" style="margin-bottom:6px"></div>
   <canvas id="cv" width="1000" height="420"></canvas>
   <small>上：ECG 10 秒與偵測到的 R 波（紅點）。下：RR 間期（紅點為被排除的心搏）。請目視確認 R 波偵測正確。</small>
-  <canvas id="cp" width="440" height="440" style="max-width:440px;margin-top:14px"></canvas>
-  <small>Poincaré 圖：RRn vs RRn+1，橢圓軸長為 SD1（短軸）與 SD2（長軸）。</small>
+  <div class="pair">
+    <div><canvas id="cp" width="440" height="440"></canvas>
+    <small>Poincaré 圖：RRn vs RRn+1，橢圓軸長為 SD1（短軸）與 SD2（長軸）。</small></div>
+    <div><canvas id="cs" width="440" height="440"></canvas>
+    <small>功率頻譜（Welch）：VLF、LF、HF 三個頻帶以色塊標示。0.1 Hz 附近的峰值常見於慢速呼吸。</small></div>
+  </div>
+</div>
+
+<div class="card" id="rp" hidden>
+  <div class="row" style="justify-content:space-between"><h2 style="margin:0">分析報告（含太極圖）</h2><button class="sec" id="bp">列印／存成 PDF</button></div>
+  <div id="rpb"></div>
+</div>
+
+<div class="card">
+  <h2>模擬器（教學用）</h2>
+  <div class="row">
+    <label>型態 <select id="sp"><option value="comet">彗星型（健康）</option><option value="torpedo">魚雷型（低變異）</option><option value="resonance">0.1 Hz 共振呼吸</option><option value="elderly">高齡型</option></select></label>
+    <label>呼吸 次/分 <input id="sr" type="number" value="15" min="4" max="24" step="0.5"></label>
+    <button id="sg">產生 5 分鐘模擬並分析</button>
+  </div>
+  <small>以簡化模型（呼吸性竇性心律不整 + 0.1 Hz 波動 + 雜訊）產生 RR，加入上方表格，與真實資料用同一套演算法分析。僅供理解圖形，不代表真人數據。</small>
+</div>
+
+<div class="card">
+  <h2>用真實資料做模擬</h2>
+  <div class="row">
+    <label>來源 <select id="ds"></select></label>
+    <label>變異倍率 × <input id="dk" type="number" value="1" min="0" max="4" step="0.1"></label>
+    <label>加入呼吸 次/分 <input id="dr" type="number" value="6" min="0" max="24" step="0.5"></label>
+    <label>振幅 ms <input id="da" type="number" value="0" min="0" max="200" step="5"></label>
+    <button id="dg">套用並分析</button>
+  </div>
+  <small>取一筆已匯入資料的有效 RR（已排除異常心搏），把「偏離 21 拍移動平均」的快速變異乘以倍率，再疊加指定頻率與振幅的呼吸正弦波（振幅 0 或頻率 0 ＝不加）。結果以新的一列加入表格與報告，可與原始資料對照。被排除的心搏會造成局部時間跳接，為近似處理。</small>
+</div>
+
+<div class="card">
+  <h2>研究指南</h2>
+  <details open><summary>如何讀 Poincaré 圖（太極圖）</summary>
+    <ul><li>SD1 反映逐拍變異，主要由迷走神經調控，與 RMSSD 高度相關。</li>
+    <li>SD2 反映較長期的整體變異，與 SDNN 較相關。</li>
+    <li>點雲沿對角線拉長如彗星狀，通常表示心率有明顯起伏；點雲很小、集中成團，表示整體變異偏低。判讀要搭配 QC 與 R 波目視檢查。</li></ul></details>
+  <details><summary>神經內臟整合模型（NVI）</summary>
+    <p>NVI 由 Thayer 與 Lane 提出，認為前額葉等中央自主神經網路（CAN）會透過迷走神經抑制杏仁核等區域，並同時調節心臟。迷走神經調控的 HRV（如 RMSSD、HF）因此被視為反映情緒與認知自我調節能力的外周指標。</p></details>
+  <details><summary>HRV 與高齡者的執行功能</summary>
+    <p>多篇研究（如 Matos et al., 2020）報告高齡者較高的 HRV 與較佳的執行功能有關。這是相關性證據，不能直接推論因果，且樣本、量測條件與指標選擇都會影響結果。</p></details>
+  <details><summary>0.1 Hz 共振呼吸與心率一致性</summary>
+    <p>以約每分鐘 6 次（0.1 Hz）呼吸時，呼吸性竇性心律不整與血壓反射的節律會同步，使心率振盪加大，LF 功率明顯上升，此即共振頻率生理回饋（Lehrer）的基礎。McCraty 的「心率一致性」同樣強調 0.1 Hz 附近的規律波形。實際共振頻率因人而異，約在 4.5–7 次/分之間。</p></details>
+  <details><summary>指標使用注意</summary>
+    <ul><li>LF/HF 不能簡單視為「交感／副交感平衡」，LF 同時含有迷走與血壓反射成分。</li>
+    <li>短時間記錄的頻域指標與非線性指標穩定度較差，請留意 QC 欄。</li>
+    <li>呼吸頻率落在 0.15 Hz 以下時，其效應會算入 LF 而非 HF。</li></ul></details>
 </div>
 
 <div class="card"><small>方法：排除起始飽和雜訊（最後一次飽和後再加 2 秒）→ R 波偵測（導數平方、不反應期 300 ms）→ RR 異常值（偏離局部中位數 &gt; 20% 或不在 300–2000 ms）排除 → 時域指標；頻域以三次樣條 4 Hz 重取樣、線性去趨勢、Welch（Hann、約 128 秒視窗、50% 重疊）。VLF 0.003–0.04、LF 0.04–0.15、HF 0.15–0.40 Hz；TP = VLF+LF+HF。
@@ -138,7 +194,7 @@ function analyzeRR(rr){
   if(dur<240)qc.push("短於5分鐘");if(ex>5)qc.push("排除心搏>5%");if(good.length<300)qc.push("心搏<300，非線性指標不穩定");
   return{beats:n,analysed_s:dur,excluded_pct:ex,meanNN_ms:mnn,HR_bpm:60000/mnn,SDNN_ms:sdnn,RMSSD_ms:rmssd,pNN50_pct:pnn,SD1_ms:sd1,SD2_ms:sd2,SD1_SD2:sd1/sd2,
    VLF_ms2:vlf,LF_ms2:lf,HF_ms2:hf,TP_ms2:tp,LFnu:100*lf/(lf+hf),HFnu:100*hf/(lf+hf),LF_HF:lf/hf,lnHF:Math.log(hf),lnLF:Math.log(lf),lnTP:Math.log(tp),
-   HF_peak_Hz:pf,SampEn:SE,ApEn:AE,DFA_a1:a1,DFA_a2:a2,HiguchiFD:hfd,MSE_sum:ms,QC:qc.length?qc.join("；"):"OK",_rr:rr,_ok:ok,_t:t};
+   HF_peak_Hz:pf,SampEn:SE,ApEn:AE,DFA_a1:a1,DFA_a2:a2,HiguchiFD:hfd,MSE_sum:ms,QC:qc.length?qc.join("；"):"OK",_rr:rr,_ok:ok,_t:t,_P:P,_df:df};
 }
 
 /* ---------- RAW：R 波偵測 ---------- */
@@ -180,6 +236,7 @@ function render(){
     const v=r[c];return `<td class="${c==="QC"?(v==="OK"?"good":"warn"):""}">${fmt(v)}</td>`;}).join("")+"</tr>").join("");
   const has=rows.length>0;["bx","bc","bk"].forEach(id=>$(id).disabled=!has);
   $("st").textContent=has?`${rows.length} 筆`:"";
+  renderReport();
 }
 async function handle(files){
   const fsOv=parseFloat($("fs").value)||0;
@@ -191,8 +248,8 @@ async function handle(files){
   }
   if(rows.length&&sel<0)show(rows.length-1);
 }
-function poincare(r){
-  const cv=$("cp"),g=cv.getContext("2d"),W=cv.width,cs=getComputedStyle(document.documentElement),
+function poincare(r,cvEl){
+  const cv=cvEl||$("cp"),g=cv.getContext("2d"),W=cv.width,cs=getComputedStyle(document.documentElement),
     fg=cs.getPropertyValue("--fg"),mut=cs.getPropertyValue("--mut"),acc=cs.getPropertyValue("--acc"),bad=cs.getPropertyValue("--bad");
   g.clearRect(0,0,W,W);const p=[];for(let i=1;i<r._rr.length;i++)if(r._ok[i]&&r._ok[i-1])p.push([r._rr[i-1],r._rr[i]]);
   if(!p.length)return;const all=p.flat(),mn=Math.min(...all)-20,mx=Math.max(...all)+20,S=v=>40+(v-mn)/(mx-mn)*(W-60),Y=v=>W-40-(v-mn)/(mx-mn)*(W-60);
@@ -203,10 +260,25 @@ function poincare(r){
   g.fillStyle=mut;g.font="13px sans-serif";g.fillText("RRn (ms)",W/2-20,W-8);g.fillText("RRn+1",2,14);
   g.fillText("SD1 "+r.SD1_ms.toFixed(1)+"　SD2 "+r.SD2_ms.toFixed(1)+"　SD1/SD2 "+r.SD1_SD2.toFixed(2),46,36);
 }
+function psd(r,cvEl){
+  const cv=cvEl||$("cs"),g=cv.getContext("2d"),W=cv.width,H=cv.height,c=getComputedStyle(document.documentElement),
+    mut=c.getPropertyValue("--mut"),acc=c.getPropertyValue("--acc"),ok=c.getPropertyValue("--ok"),bad=c.getPropertyValue("--bad");
+  g.clearRect(0,0,W,H);if(!r._P)return;
+  const P=r._P,df=r._df,fm=.5,K=Math.floor(fm/df);let mx=0;for(let k=0;k<=K;k++)mx=Math.max(mx,P[k]);if(!mx)return;
+  const X=f=>40+f/fm*(W-60),Y=v=>H-40-v/mx*(H-70);
+  g.font="13px sans-serif";
+  for(const[a,b,col,nm]of[[.003,.04,mut,"VLF"],[.04,.15,acc,"LF"],[.15,.4,ok,"HF"]]){
+    g.globalAlpha=.14;g.fillStyle=col;g.fillRect(X(a),30,X(b)-X(a),H-70);g.globalAlpha=1;g.fillStyle=col;g.fillText(nm,X((a+b)/2)-10,24);}
+  g.strokeStyle=bad;g.lineWidth=1;g.setLineDash([4,4]);g.beginPath();g.moveTo(X(.1),30);g.lineTo(X(.1),H-40);g.stroke();g.setLineDash([]);
+  g.strokeStyle=mut;g.strokeRect(40,30,W-60,H-70);
+  g.strokeStyle=acc;g.lineWidth=2;g.beginPath();for(let k=0;k<=K;k++){const px=X(k*df),py=Y(P[k]);k?g.lineTo(px,py):g.moveTo(px,py);}g.stroke();
+  g.fillStyle=mut;g.fillText("頻率 (Hz)　0–0.5　虛線＝0.1 Hz",50,H-14);g.fillText("PSD",2,14);
+  for(const f of[0,.1,.2,.3,.4,.5])g.fillText(f.toFixed(1),X(f)-8,H-24);
+}
 function show(i){
   sel=i;render();const r=rows[i];if(!r||!r._rr){$("pc").hidden=true;return;}
   $("pc").hidden=false;$("pt").textContent=r.file+"　HR "+fmt(r.HR_bpm)+" bpm｜RMSSD "+fmt(r.RMSSD_ms)+" ms｜HF "+fmt(r.HF_ms2)+" ms²｜SampEn "+fmt(r.SampEn)+"｜DFA α1 "+fmt(r.DFA_a1);
-  poincare(r);
+  poincare(r);psd(r);
   const cv=$("cv"),g=cv.getContext("2d"),W=cv.width,H=cv.height,cs=getComputedStyle(document.documentElement),
     fg=cs.getPropertyValue("--fg"),mut=cs.getPropertyValue("--mut"),acc=cs.getPropertyValue("--acc"),bad=cs.getPropertyValue("--bad");
   g.clearRect(0,0,W,H);g.font="13px sans-serif";g.fillStyle=mut;
@@ -235,6 +307,38 @@ $("bx").onclick=async()=>{
   const blob=new Blob([XLSX.write(wb,{bookType:"xlsx",type:"array"})],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
   try{const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="HRV_results.xlsx";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),5000);$("st").textContent="已匯出";}
   catch(e){$("st").textContent="無法直接下載，請改用「複製表格」貼到 Excel";}
+};
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function renderReport(){
+  fillSrc();
+  const box=$("rpb"),list=rows.filter(r=>r._rr);$("rp").hidden=!list.length;if(!list.length){box.innerHTML="";return;}
+  const K=[["HR_bpm","HR (bpm)"],["SDNN_ms","SDNN (ms)"],["RMSSD_ms","RMSSD (ms)"],["pNN50_pct","pNN50 (%)"],["SD1_ms","SD1 (ms)"],["SD2_ms","SD2 (ms)"],["SD1_SD2","SD1/SD2"],["LF_ms2","LF (ms²)"],["HF_ms2","HF (ms²)"],["LF_HF","LF/HF"],["SampEn","SampEn"],["DFA_a1","DFA α1"]];
+  box.innerHTML=list.map((r,i)=>`<div class="rep"><b>${esc(r.file)}</b> <small>${esc(r.source)}｜${fmt(r.analysed_s)} 秒｜QC：${esc(r.QC)}</small><div class="tw"><table><tr>${K.map(k=>`<th>${k[1]}</th>`).join("")}</tr><tr>${K.map(k=>`<td>${fmt(r[k[0]])}</td>`).join("")}</tr></table></div><div class="pair"><div><canvas id="rpp${i}" width="440" height="440"></canvas><small>太極圖（Poincaré）</small></div><div><canvas id="rps${i}" width="440" height="440"></canvas><small>功率頻譜</small></div></div></div>`).join("");
+  list.forEach((r,i)=>{poincare(r,$("rpp"+i));psd(r,$("rps"+i));});
+}
+$("bp").onclick=()=>{document.body.classList.add("pr");try{window.print();}catch(e){}setTimeout(()=>document.body.classList.remove("pr"),500);};
+
+/* ---------- 模擬器 ---------- */
+const PRE={comet:{n:"模擬：彗星型",hr:68,rsa:45,lf:25,noise:12,resp:15},torpedo:{n:"模擬：魚雷型",hr:78,rsa:8,lf:6,noise:3,resp:15},resonance:{n:"模擬：共振呼吸",hr:66,rsa:60,lf:0,noise:8,resp:6},elderly:{n:"模擬：高齡型",hr:74,rsa:14,lf:12,noise:6,resp:14}};
+const gauss=()=>Math.sqrt(-2*Math.log(1-Math.random()))*Math.cos(2*Math.PI*Math.random());
+$("sp").onchange=()=>{$("sr").value=PRE[$("sp").value].resp;};
+$("sg").onclick=()=>{
+  const p=PRE[$("sp").value],resp=parseFloat($("sr").value)||p.resp,f=resp/60,rr=[];let t=0;
+  while(t<300){const v=60000/p.hr+p.rsa*Math.sin(2*Math.PI*f*t)+(Math.abs(f-.1)<.01?0:p.lf*Math.sin(2*Math.PI*.1*t+1))+gauss()*p.noise;rr.push(v);t+=v/1000;}
+  const a=analyzeRR(rr);if(a.err){$("st").textContent=a.err;return;}
+  rows.push({file:p.n+"（"+resp+" 次/分）",source:"模擬",fs_Hz:"",...a,QC:"模擬資料；"+a.QC});
+  show(rows.length-1);
+};
+function fillSrc(){const s=$("ds"),cur=s.value;s.innerHTML=rows.map((r,i)=>r._rr?`<option value="${i}">${esc(r.file)}</option>`:"").join("");if(cur&&s.querySelector(`option[value="${cur}"]`))s.value=cur;}
+$("dg").onclick=()=>{
+  const r=rows[+$("ds").value];if(!r||!r._rr){$("st").textContent="請先匯入資料";return;}
+  const g=parseFloat($("dk").value),k=isFinite(g)?g:1,rp=parseFloat($("dr").value)||0,am=parseFloat($("da").value)||0,
+    good=r._rr.filter((_,i)=>r._ok[i]),n=good.length,out=[];let t=0;
+  for(let i=0;i<n;i++){const ma=mean(good.slice(Math.max(0,i-10),Math.min(n,i+11)));
+    const v=ma+(good[i]-ma)*k+(am&&rp?am*Math.sin(2*Math.PI*rp/60*t):0);out.push(v);t+=v/1000;}
+  const a=analyzeRR(out);if(a.err){$("st").textContent=a.err;return;}
+  rows.push({file:"調整："+r.file+"（×"+k+(am&&rp?"，+"+rp+" 次/分 "+am+" ms":"")+"）",source:"調整",fs_Hz:"",...a,QC:"調整資料；"+a.QC});
+  show(rows.length-1);
 };
 render();
 </script>
